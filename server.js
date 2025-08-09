@@ -56,29 +56,149 @@ const deviceSchema = new mongoose.Schema({
 const Device = mongoose.model('Device', deviceSchema);
 
 // ---------- Helpers ----------
+// Simple in-memory cache for IP lookups
+const ipCache = new Map();
+const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
 async function lookupIP(ip) {
-  // Use ipapi.co as example. For production get an API key / paid tier.
-  const base = process.env.IPAPI_BASE || 'https://ipapi.co';
-  try {
-    // ipapi supports /json/ for auto; using specific ip for clarity
-    const url = `${base}/${ip}/json/`;
-    const res = await fetch(url, { timeout: 5000 });
-    if (!res.ok) throw new Error(`Geo lookup failed: ${res.status}`);
-    const json = await res.json();
-    return json;
-  } catch (err) {
-    console.warn('IP lookup failed:', err.message || err);
-    return {};
+  // Check cache first
+  const cacheKey = ip || 'auto';
+  const cached = ipCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+    console.log('Using cached location data for:', cacheKey);
+    return cached.data;
   }
+
+  // Multiple free services to try
+  const services = [
+    {
+      name: 'ipapi.co',
+      getUrl: (ip) => ip ? `https://ipapi.co/${ip}/json/` : 'https://ipapi.co/json/',
+      timeout: 8000
+    },
+    {
+      name: 'ip-api.com',
+      getUrl: (ip) => ip ? `http://ip-api.com/json/${ip}` : 'http://ip-api.com/json/',
+      timeout: 8000,
+      transform: (data) => ({
+        ip: data.query,
+        city: data.city,
+        region: data.regionName,
+        region_code: data.region,
+        country: data.country,
+        country_name: data.country,
+        country_code: data.countryCode,
+        latitude: data.lat,
+        longitude: data.lon,
+        timezone: data.timezone,
+        org: data.org || data.isp,
+        postal: data.zip
+      })
+    },
+    {
+      name: 'ipinfo.io',
+      getUrl: (ip) => ip ? `https://ipinfo.io/${ip}/json` : 'https://ipinfo.io/json',
+      timeout: 8000,
+      transform: (data) => ({
+        ip: data.ip,
+        city: data.city,
+        region: data.region,
+        country: data.country,
+        country_name: data.country,
+        latitude: data.loc ? parseFloat(data.loc.split(',')[0]) : null,
+        longitude: data.loc ? parseFloat(data.loc.split(',')[1]) : null,
+        org: data.org,
+        postal: data.postal,
+        timezone: data.timezone
+      })
+    }
+  ];
+
+  // Determine if we should use auto-detection
+  const useAuto = !ip || ip === '::1' || ip === '127.0.0.1' || 
+                  ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.');
+  
+  if (useAuto) {
+    console.log('Using auto IP detection for local/private IP:', ip);
+  } else {
+    console.log('Looking up specific IP:', ip);
+  }
+
+  // Try each service
+  for (const service of services) {
+    try {
+      const url = service.getUrl(useAuto ? null : ip);
+      console.log(`Trying ${service.name}:`, url);
+      
+      const res = await fetch(url, { timeout: service.timeout });
+      
+      if (!res.ok) {
+        if (res.status === 429) {
+          console.warn(`${service.name} rate limited (429), trying next service...`);
+          continue;
+        }
+        throw new Error(`${service.name} failed: ${res.status} ${res.statusText}`);
+      }
+      
+      const json = await res.json();
+      
+      // Transform data if needed
+      const locationData = service.transform ? service.transform(json) : json;
+      
+      console.log(`✅ ${service.name} success - Keys:`, Object.keys(locationData));
+      console.log('Location sample:', {
+        ip: locationData.ip,
+        city: locationData.city,
+        country: locationData.country_name || locationData.country,
+        org: locationData.org
+      });
+      
+      // Cache the result
+      ipCache.set(cacheKey, {
+        data: locationData,
+        timestamp: Date.now()
+      });
+      
+      return locationData;
+      
+    } catch (err) {
+      console.warn(`${service.name} failed:`, err.message);
+      continue;
+    }
+  }
+  
+  console.warn('All IP lookup services failed');
+  return {};
 }
 
 function getClientIp(req) {
   // Prefer x-forwarded-for for deployments behind proxies/load balancers
   const forwarded = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
-  if (forwarded) return forwarded.split(',')[0].trim();
-  if (req.connection && req.connection.remoteAddress) return req.connection.remoteAddress;
-  if (req.socket && req.socket.remoteAddress) return req.socket.remoteAddress;
-  if (req.ip) return req.ip;
+  if (forwarded) {
+    const ip = forwarded.split(',')[0].trim();
+    console.log('IP from forwarded header:', ip);
+    return ip;
+  }
+  
+  // Try various sources for the IP
+  const sources = [
+    req.connection?.remoteAddress,
+    req.socket?.remoteAddress,
+    req.ip,
+    req.headers['cf-connecting-ip'], // Cloudflare
+    req.headers['x-forwarded-for'],
+    req.headers['x-real-ip']
+  ];
+  
+  for (const source of sources) {
+    if (source) {
+      const ip = source.replace(/^::ffff:/, '').trim();
+      console.log('IP detected from source:', ip);
+      return ip;
+    }
+  }
+  
+  console.log('No IP detected, will use auto-detection');
   return '';
 }
 
@@ -86,17 +206,43 @@ function getClientIp(req) {
 app.post('/collect', async (req, res) => {
   try {
     const body = req.body || {};
-    const ip = getClientIp(req).replace(/^::ffff:/, '') || '';
-
-    const location = await lookupIP(ip || ''); // if ip empty, ipapi will use caller IP (server IP), so handle accordingly
-
-    const doc = new Device({
-      ...body,
-      ip,
-      location
+    const detectedIp = getClientIp(req);
+    
+    console.log('--- New device collection request ---');
+    console.log('Detected IP:', detectedIp);
+    console.log('Request headers:', {
+      'x-forwarded-for': req.headers['x-forwarded-for'],
+      'x-real-ip': req.headers['x-real-ip'],
+      'cf-connecting-ip': req.headers['cf-connecting-ip'],
+      'user-agent': req.headers['user-agent']?.substring(0, 100) + '...'
     });
 
+    const location = await lookupIP(detectedIp);
+    console.log('Location data received keys:', Object.keys(location));
+    console.log('Location data sample:', {
+      ip: location.ip,
+      city: location.city,
+      country: location.country_name,
+      latitude: location.latitude,
+      longitude: location.longitude
+    });
+    
+    // Use the IP from location data if available (more accurate for public IP)
+    const finalIp = location.ip || detectedIp;
+    
+    const deviceData = {
+      ...body,
+      ip: finalIp,
+      location: Object.keys(location).length > 0 ? location : null
+    };
+
+    console.log('Saving device data with location keys:', Object.keys(deviceData.location || {}));
+    
+    const doc = new Device(deviceData);
     const saved = await doc.save();
+    
+    console.log('Device data saved successfully with IP:', finalIp);
+    console.log('Saved location keys:', Object.keys(saved.location || {}));
 
     // Return the stored document to the frontend
     res.json({ success: true, data: saved });
@@ -126,6 +272,46 @@ app.get('/health', (req, res) => {
 // Hello endpoint for keep-alive
 app.get('/hello', (req, res) => {
   res.json({ message: 'Hello! Server is alive', timestamp: new Date().toISOString() });
+});
+
+// Test location lookup endpoint
+app.get('/test-location/:ip?', async (req, res) => {
+  try {
+    const testIp = req.params.ip || getClientIp(req);
+    console.log('Testing location lookup for IP:', testIp);
+    
+    const location = await lookupIP(testIp);
+    
+    res.json({ 
+      success: true, 
+      testedIp: testIp,
+      locationData: location,
+      dataKeys: Object.keys(location),
+      cacheSize: ipCache.size
+    });
+  } catch (err) {
+    console.error('Test location error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Cache management endpoint
+app.get('/cache-info', (req, res) => {
+  const cacheInfo = Array.from(ipCache.entries()).map(([key, value]) => ({
+    key,
+    age: Math.round((Date.now() - value.timestamp) / 1000 / 60), // minutes
+    hasData: Object.keys(value.data).length > 0
+  }));
+  
+  res.json({
+    size: ipCache.size,
+    entries: cacheInfo
+  });
+});
+
+app.post('/clear-cache', (req, res) => {
+  ipCache.clear();
+  res.json({ success: true, message: 'Cache cleared' });
 });
 
 // Serve index.html for root
