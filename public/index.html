@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Device Collector — Live</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif; padding: 20px; background:#f7fafc; color:#111827; }
+    .card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 6px 18px rgba(16,24,40,0.06); max-width:900px; margin:auto; }
+    pre { background:#0f172a; color:#d1d5db; padding:12px; border-radius:8px; overflow:auto; }
+    h1 { margin-top:0; }
+    .notice { font-size:0.9rem; color:#6b7280; margin-bottom:12px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    @media (max-width:700px){ .grid { grid-template-columns: 1fr } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Device & Connection Info</h1>
+    <p class="notice">This page automatically collects device + network info (non-sensitive). If you are the site owner, ensure you have a proper privacy notice. The data below is returned from the server after storage.</p>
+
+    <div id="status">Collecting device details...</div>
+    <div id="content" style="margin-top:12px; display:none;">
+      <div class="grid">
+        <div>
+          <h3>Summary</h3>
+          <div id="summary"></div>
+        </div>
+        <div>
+          <h3>Geo / Network</h3>
+          <div id="geo"></div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:16px">Full stored record</h3>
+      <pre id="raw"></pre>
+    </div>
+  </div>
+
+  <script>
+    // Collect maximum allowed info from browser
+    function getDeviceInfo() {
+      const nav = navigator || {};
+      const scr = screen || {};
+      return {
+        userAgent: nav.userAgent || '',
+        language: nav.language || '',
+        languages: Array.isArray(nav.languages) ? nav.languages : (nav.languages || []).slice(0,5),
+        platform: nav.platform || '',
+        vendor: nav.vendor || '',
+        online: typeof nav.onLine === 'boolean' ? nav.onLine : null,
+        cookieEnabled: !!nav.cookieEnabled,
+        screen: {
+          width: scr.width || null,
+          height: scr.height || null,
+          availWidth: scr.availWidth || null,
+          availHeight: scr.availHeight || null,
+          colorDepth: scr.colorDepth || null,
+          pixelDepth: scr.pixelDepth || null
+        },
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+        hardwareConcurrency: nav.hardwareConcurrency || null,
+        deviceMemory: nav.deviceMemory || null,
+        referrer: document.referrer || '',
+        pageURL: window.location.href
+      };
+    }
+
+    async function postAndDisplay() {
+      try {
+        const info = getDeviceInfo();
+
+        document.getElementById('status').innerText = 'Sending to server...';
+        const res = await fetch('/collect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(info)
+        });
+
+        const payload = await res.json();
+        if (!payload || !payload.success) {
+          document.getElementById('status').innerText = 'Failed to collect (server error)';
+          console.error('Server error:', payload);
+          return;
+        }
+
+        const data = payload.data;
+        document.getElementById('status').innerText = 'Collected & stored successfully';
+        document.getElementById('content').style.display = 'block';
+
+        // Summary
+        const summaryEl = document.getElementById('summary');
+        summaryEl.innerHTML = `
+          <div><strong>UA:</strong> ${escapeHtml(data.userAgent || '')}</div>
+          <div><strong>Platform:</strong> ${escapeHtml(data.platform || '')}</div>
+          <div><strong>Language:</strong> ${escapeHtml(data.language || '')}</div>
+          <div><strong>Screen:</strong> ${data.screen?.width || '?'} x ${data.screen?.height || '?'}</div>
+          <div><strong>Timezone:</strong> ${escapeHtml(data.timezone || '')}</div>
+          <div><strong>CPU cores:</strong> ${data.hardwareConcurrency ?? 'N/A'}</div>
+          <div><strong>Approx RAM (GB):</strong> ${data.deviceMemory ?? 'N/A'}</div>
+          <div><strong>IP:</strong> ${escapeHtml(data.ip || '')}</div>
+          <div><strong>Captured:</strong> ${new Date(data.createdAt).toLocaleString()}</div>
+        `;
+
+        // Geo / network
+        const geoEl = document.getElementById('geo');
+        const loc = data.location || {};
+        geoEl.innerHTML = `
+          <div><strong>IP:</strong> ${escapeHtml(loc.ip || data.ip || '')}</div>
+          <div><strong>City:</strong> ${escapeHtml(loc.city || '')}</div>
+          <div><strong>Region:</strong> ${escapeHtml(loc.region || loc.region_name || '')}</div>
+          <div><strong>Country:</strong> ${escapeHtml(loc.country_name || loc.country || '')}</div>
+          <div><strong>Latitude / Longitude:</strong> ${loc.latitude ?? loc.lat ?? ''} ${loc.longitude ?? loc.lon ?? ''}</div>
+          <div><strong>Org / ISP:</strong> ${escapeHtml(loc.org || loc.isp || '')}</div>
+        `;
+
+        // Raw JSON
+        document.getElementById('raw').innerText = JSON.stringify(data, null, 2);
+
+      } catch (err) {
+        console.error(err);
+        document.getElementById('status').innerText = 'Error collecting data';
+      }
+    }
+
+    // Basic escaping to prevent injected text display
+    function escapeHtml(s) {
+      if (!s && s !== 0) return '';
+      return String(s)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    // Do it automatically on page load
+    window.addEventListener('load', () => {
+      // slight delay to ensure any analytics/privacy banners can show first (optional)
+      setTimeout(postAndDisplay, 300);
+    });
+  </script>
+</body>
+</html>
