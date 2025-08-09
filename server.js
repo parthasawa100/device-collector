@@ -28,6 +28,7 @@ mongoose.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true 
   });
 
 const deviceSchema = new mongoose.Schema({
+  // Basic info
   userAgent: String,
   language: String,
   languages: [String],
@@ -35,19 +36,81 @@ const deviceSchema = new mongoose.Schema({
   vendor: String,
   online: Boolean,
   cookieEnabled: Boolean,
+  timezone: String,
+  referrer: String,
+  pageURL: String,
+  collectionTimestamp: Date,
+  
+  // Screen and display
   screen: {
     width: Number,
     height: Number,
     availWidth: Number,
     availHeight: Number,
     colorDepth: Number,
-    pixelDepth: Number
+    pixelDepth: Number,
+    pixelRatio: Number,
+    orientation: mongoose.Schema.Types.Mixed
   },
-  timezone: String,
-  hardwareConcurrency: Number,
-  deviceMemory: mongoose.Schema.Types.Mixed,
-  referrer: String,
-  pageURL: String,
+  
+  // Viewport
+  viewport: {
+    width: Number,
+    height: Number,
+    outerWidth: Number,
+    outerHeight: Number
+  },
+  
+  // Hardware capabilities
+  hardware: {
+    hardwareConcurrency: Number,
+    deviceMemory: Number,
+    maxTouchPoints: Number,
+    webdriver: Boolean
+  },
+  
+  // Network information
+  network: {
+    connection: mongoose.Schema.Types.Mixed,
+    onLine: Boolean
+  },
+  
+  // Browser capabilities
+  browserCapabilities: {
+    javaEnabled: Boolean,
+    plugins: [mongoose.Schema.Types.Mixed],
+    mimeTypes: [String],
+    doNotTrack: String,
+    globalPrivacyControl: Boolean
+  },
+  
+  // Storage capabilities
+  storage: {
+    localStorage: Boolean,
+    sessionStorage: Boolean,
+    indexedDB: Boolean,
+    webSQL: Boolean
+  },
+  
+  // Performance info
+  performance: {
+    timing: mongoose.Schema.Types.Mixed,
+    memory: mongoose.Schema.Types.Mixed
+  },
+  
+  // Graphics and WebGL
+  graphics: mongoose.Schema.Types.Mixed,
+  
+  // Audio context
+  audio: mongoose.Schema.Types.Mixed,
+  
+  // Canvas info
+  canvas: mongoose.Schema.Types.Mixed,
+  
+  // Feature detection
+  features: mongoose.Schema.Types.Mixed,
+  
+  // Server-detected info
   ip: String,
   location: mongoose.Schema.Types.Mixed,
   createdAt: { type: Date, default: Date.now }
@@ -312,6 +375,141 @@ app.get('/cache-info', (req, res) => {
 app.post('/clear-cache', (req, res) => {
   ipCache.clear();
   res.json({ success: true, message: 'Cache cleared' });
+});
+
+// Analytics endpoint for device statistics
+app.get('/analytics', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '1000'), 5000);
+    const docs = await Device.find().sort({ createdAt: -1 }).limit(limit).lean();
+    
+    const analytics = {
+      totalDevices: docs.length,
+      timeRange: {
+        from: docs[docs.length - 1]?.createdAt,
+        to: docs[0]?.createdAt
+      },
+      platforms: {},
+      browsers: {},
+      countries: {},
+      cities: {},
+      screenResolutions: {},
+      operatingSystems: {},
+      languages: {},
+      connectionTypes: {},
+      features: {
+        webRTC: 0,
+        webAssembly: 0,
+        serviceWorker: 0,
+        webGL: 0,
+        touchDevice: 0
+      },
+      hardware: {
+        totalMemory: [],
+        cpuCores: {},
+        pixelRatios: {}
+      }
+    };
+    
+    docs.forEach(doc => {
+      // Platform analysis
+      if (doc.platform) {
+        analytics.platforms[doc.platform] = (analytics.platforms[doc.platform] || 0) + 1;
+      }
+      
+      // Browser analysis from user agent
+      if (doc.userAgent) {
+        let browser = 'Unknown';
+        if (doc.userAgent.includes('Chrome')) browser = 'Chrome';
+        else if (doc.userAgent.includes('Firefox')) browser = 'Firefox';
+        else if (doc.userAgent.includes('Safari')) browser = 'Safari';
+        else if (doc.userAgent.includes('Edge')) browser = 'Edge';
+        analytics.browsers[browser] = (analytics.browsers[browser] || 0) + 1;
+        
+        // OS detection
+        let os = 'Unknown';
+        if (doc.userAgent.includes('Windows')) os = 'Windows';
+        else if (doc.userAgent.includes('Mac')) os = 'macOS';
+        else if (doc.userAgent.includes('Linux')) os = 'Linux';
+        else if (doc.userAgent.includes('Android')) os = 'Android';
+        else if (doc.userAgent.includes('iOS')) os = 'iOS';
+        analytics.operatingSystems[os] = (analytics.operatingSystems[os] || 0) + 1;
+      }
+      
+      // Location analysis
+      if (doc.location) {
+        const country = doc.location.country_name || doc.location.country;
+        const city = doc.location.city;
+        if (country) {
+          analytics.countries[country] = (analytics.countries[country] || 0) + 1;
+        }
+        if (city) {
+          analytics.cities[city] = (analytics.cities[city] || 0) + 1;
+        }
+      }
+      
+      // Screen resolution analysis
+      if (doc.screen?.width && doc.screen?.height) {
+        const resolution = `${doc.screen.width}x${doc.screen.height}`;
+        analytics.screenResolutions[resolution] = (analytics.screenResolutions[resolution] || 0) + 1;
+      }
+      
+      // Language analysis
+      if (doc.language) {
+        analytics.languages[doc.language] = (analytics.languages[doc.language] || 0) + 1;
+      }
+      
+      // Connection type analysis
+      if (doc.network?.connection?.effectiveType) {
+        const connType = doc.network.connection.effectiveType;
+        analytics.connectionTypes[connType] = (analytics.connectionTypes[connType] || 0) + 1;
+      }
+      
+      // Feature analysis
+      if (doc.features) {
+        if (doc.features.webRTC) analytics.features.webRTC++;
+        if (doc.features.webAssembly) analytics.features.webAssembly++;
+        if (doc.features.serviceWorker) analytics.features.serviceWorker++;
+        if (doc.graphics) analytics.features.webGL++;
+        if (doc.hardware?.maxTouchPoints > 0) analytics.features.touchDevice++;
+      }
+      
+      // Hardware analysis
+      if (doc.hardware?.deviceMemory) {
+        analytics.hardware.totalMemory.push(doc.hardware.deviceMemory);
+      }
+      if (doc.hardware?.hardwareConcurrency) {
+        const cores = doc.hardware.hardwareConcurrency;
+        analytics.hardware.cpuCores[cores] = (analytics.hardware.cpuCores[cores] || 0) + 1;
+      }
+      if (doc.screen?.pixelRatio) {
+        const ratio = doc.screen.pixelRatio;
+        analytics.hardware.pixelRatios[ratio] = (analytics.hardware.pixelRatios[ratio] || 0) + 1;
+      }
+    });
+    
+    // Sort and limit top results
+    const sortAndLimit = (obj, limit = 10) => {
+      return Object.entries(obj)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, limit)
+        .reduce((r, [k, v]) => ({ ...r, [k]: v }), {});
+    };
+    
+    analytics.platforms = sortAndLimit(analytics.platforms);
+    analytics.browsers = sortAndLimit(analytics.browsers);
+    analytics.countries = sortAndLimit(analytics.countries);
+    analytics.cities = sortAndLimit(analytics.cities);
+    analytics.screenResolutions = sortAndLimit(analytics.screenResolutions);
+    analytics.operatingSystems = sortAndLimit(analytics.operatingSystems);
+    analytics.languages = sortAndLimit(analytics.languages);
+    analytics.connectionTypes = sortAndLimit(analytics.connectionTypes);
+    
+    res.json({ success: true, analytics });
+  } catch (err) {
+    console.error('Analytics error:', err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 
 // Serve index.html for root

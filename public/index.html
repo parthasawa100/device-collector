@@ -38,31 +38,209 @@
   </div>
 
   <script>
-    // Collect maximum allowed info from browser
+    // Enhanced device information collection
     function getDeviceInfo() {
       const nav = navigator || {};
       const scr = screen || {};
-      return {
+      const perf = performance || {};
+      
+      // Basic info
+      const basicInfo = {
         userAgent: nav.userAgent || '',
         language: nav.language || '',
-        languages: Array.isArray(nav.languages) ? nav.languages : (nav.languages || []).slice(0,5),
+        languages: Array.isArray(nav.languages) ? nav.languages : (nav.languages || []).slice(0,10),
         platform: nav.platform || '',
         vendor: nav.vendor || '',
         online: typeof nav.onLine === 'boolean' ? nav.onLine : null,
         cookieEnabled: !!nav.cookieEnabled,
-        screen: {
-          width: scr.width || null,
-          height: scr.height || null,
-          availWidth: scr.availWidth || null,
-          availHeight: scr.availHeight || null,
-          colorDepth: scr.colorDepth || null,
-          pixelDepth: scr.pixelDepth || null
-        },
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
-        hardwareConcurrency: nav.hardwareConcurrency || null,
-        deviceMemory: nav.deviceMemory || null,
         referrer: document.referrer || '',
         pageURL: window.location.href
+      };
+
+      // Screen and display info
+      const screenInfo = {
+        width: scr.width || null,
+        height: scr.height || null,
+        availWidth: scr.availWidth || null,
+        availHeight: scr.availHeight || null,
+        colorDepth: scr.colorDepth || null,
+        pixelDepth: scr.pixelDepth || null,
+        pixelRatio: window.devicePixelRatio || null,
+        orientation: scr.orientation ? {
+          angle: scr.orientation.angle,
+          type: scr.orientation.type
+        } : null
+      };
+
+      // Hardware capabilities
+      const hardwareInfo = {
+        hardwareConcurrency: nav.hardwareConcurrency || null,
+        deviceMemory: nav.deviceMemory || null,
+        maxTouchPoints: nav.maxTouchPoints || null,
+        webdriver: nav.webdriver || false
+      };
+
+      // Network information
+      const networkInfo = {
+        connection: nav.connection ? {
+          effectiveType: nav.connection.effectiveType,
+          downlink: nav.connection.downlink,
+          rtt: nav.connection.rtt,
+          saveData: nav.connection.saveData
+        } : null,
+        onLine: nav.onLine
+      };
+
+      // Browser capabilities and features
+      const browserCapabilities = {
+        javaEnabled: nav.javaEnabled ? nav.javaEnabled() : false,
+        plugins: Array.from(nav.plugins || []).slice(0, 10).map(p => ({
+          name: p.name,
+          filename: p.filename,
+          description: p.description
+        })),
+        mimeTypes: Array.from(nav.mimeTypes || []).slice(0, 20).map(m => m.type),
+        doNotTrack: nav.doNotTrack,
+        globalPrivacyControl: nav.globalPrivacyControl || false
+      };
+
+      // Storage capabilities
+      const storageInfo = {
+        localStorage: (() => {
+          try {
+            return typeof Storage !== 'undefined' && !!window.localStorage;
+          } catch { return false; }
+        })(),
+        sessionStorage: (() => {
+          try {
+            return typeof Storage !== 'undefined' && !!window.sessionStorage;
+          } catch { return false; }
+        })(),
+        indexedDB: !!window.indexedDB,
+        webSQL: !!window.openDatabase
+      };
+
+      // Performance and timing
+      const performanceInfo = {
+        timing: perf.timing ? {
+          navigationStart: perf.timing.navigationStart,
+          loadEventEnd: perf.timing.loadEventEnd,
+          domContentLoadedEventEnd: perf.timing.domContentLoadedEventEnd,
+          connectEnd: perf.timing.connectEnd,
+          connectStart: perf.timing.connectStart
+        } : null,
+        memory: perf.memory ? {
+          usedJSHeapSize: perf.memory.usedJSHeapSize,
+          totalJSHeapSize: perf.memory.totalJSHeapSize,
+          jsHeapSizeLimit: perf.memory.jsHeapSizeLimit
+        } : null
+      };
+
+      // WebGL and Graphics info
+      const graphicsInfo = (() => {
+        try {
+          const canvas = document.createElement('canvas');
+          const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+          if (gl) {
+            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            return {
+              vendor: gl.getParameter(gl.VENDOR),
+              renderer: gl.getParameter(gl.RENDERER),
+              version: gl.getParameter(gl.VERSION),
+              shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+              unmaskedVendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : null,
+              unmaskedRenderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : null,
+              maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+              maxRenderBufferSize: gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)
+            };
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      })();
+
+      // Audio context info
+      const audioInfo = (() => {
+        try {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (AudioContext) {
+            const audioContext = new AudioContext();
+            const info = {
+              sampleRate: audioContext.sampleRate,
+              maxChannelCount: audioContext.destination.maxChannelCount,
+              numberOfInputs: audioContext.destination.numberOfInputs,
+              numberOfOutputs: audioContext.destination.numberOfOutputs,
+              state: audioContext.state
+            };
+            audioContext.close();
+            return info;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      })();
+
+      // Canvas fingerprinting (privacy-respectful)
+      const canvasInfo = (() => {
+        try {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          ctx.textBaseline = 'top';
+          ctx.font = '14px Arial';
+          ctx.fillText('Device fingerprint test', 2, 2);
+          return {
+            supported: true,
+            dataURL: canvas.toDataURL().substring(0, 50) + '...' // Only first 50 chars for privacy
+          };
+        } catch {
+          return { supported: false };
+        }
+      })();
+
+      // Feature detection
+      const features = {
+        webRTC: !!(window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection),
+        webAssembly: typeof WebAssembly === 'object',
+        serviceWorker: 'serviceWorker' in nav,
+        webWorker: typeof Worker !== 'undefined',
+        geolocation: 'geolocation' in nav,
+        notification: 'Notification' in window,
+        pushManager: 'PushManager' in window,
+        camera: !!(nav.mediaDevices && nav.mediaDevices.getUserMedia),
+        webBluetooth: 'bluetooth' in nav,
+        webUSB: 'usb' in nav,
+        webVR: 'getVRDisplays' in nav,
+        webXR: 'xr' in nav,
+        gamepads: 'getGamepads' in nav,
+        vibrate: 'vibrate' in nav,
+        battery: 'getBattery' in nav,
+        share: 'share' in nav,
+        clipboard: 'clipboard' in nav,
+        permissions: 'permissions' in nav
+      };
+
+      return {
+        ...basicInfo,
+        screen: screenInfo,
+        hardware: hardwareInfo,
+        network: networkInfo,
+        browserCapabilities,
+        storage: storageInfo,
+        performance: performanceInfo,
+        graphics: graphicsInfo,
+        audio: audioInfo,
+        canvas: canvasInfo,
+        features,
+        collectionTimestamp: new Date().toISOString(),
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+          outerWidth: window.outerWidth,
+          outerHeight: window.outerHeight
+        }
       };
     }
 
@@ -93,11 +271,18 @@
         summaryEl.innerHTML = `
           <div><strong>UA:</strong> ${escapeHtml(data.userAgent || '')}</div>
           <div><strong>Platform:</strong> ${escapeHtml(data.platform || '')}</div>
-          <div><strong>Language:</strong> ${escapeHtml(data.language || '')}</div>
-          <div><strong>Screen:</strong> ${data.screen?.width || '?'} x ${data.screen?.height || '?'}</div>
+          <div><strong>Language:</strong> ${escapeHtml(data.language || '')} (${(data.languages || []).length} total)</div>
+          <div><strong>Screen:</strong> ${data.screen?.width || '?'} x ${data.screen?.height || '?'} (${data.screen?.pixelRatio || '?'}x DPR)</div>
+          <div><strong>Viewport:</strong> ${data.viewport?.width || '?'} x ${data.viewport?.height || '?'}</div>
           <div><strong>Timezone:</strong> ${escapeHtml(data.timezone || '')}</div>
-          <div><strong>CPU cores:</strong> ${data.hardwareConcurrency ?? 'N/A'}</div>
-          <div><strong>Approx RAM (GB):</strong> ${data.deviceMemory ?? 'N/A'}</div>
+          <div><strong>CPU cores:</strong> ${data.hardware?.hardwareConcurrency ?? 'N/A'}</div>
+          <div><strong>RAM (GB):</strong> ${data.hardware?.deviceMemory ?? 'N/A'}</div>
+          <div><strong>Touch points:</strong> ${data.hardware?.maxTouchPoints ?? 'N/A'}</div>
+          <div><strong>Connection:</strong> ${data.network?.connection?.effectiveType || 'N/A'} (${data.network?.connection?.downlink || '?'}Mbps)</div>
+          <div><strong>Graphics:</strong> ${data.graphics?.renderer || 'N/A'}</div>
+          <div><strong>Audio:</strong> ${data.audio?.sampleRate || 'N/A'}Hz, ${data.audio?.maxChannelCount || '?'} channels</div>
+          <div><strong>Storage:</strong> LS:${data.storage?.localStorage ? '✓' : '✗'} SS:${data.storage?.sessionStorage ? '✓' : '✗'} IDB:${data.storage?.indexedDB ? '✓' : '✗'}</div>
+          <div><strong>Features:</strong> WebRTC:${data.features?.webRTC ? '✓' : '✗'} WASM:${data.features?.webAssembly ? '✓' : '✗'} SW:${data.features?.serviceWorker ? '✓' : '✗'}</div>
           <div><strong>IP:</strong> ${escapeHtml(data.ip || '')}</div>
           <div><strong>Captured:</strong> ${new Date(data.createdAt).toLocaleString()}</div>
         `;
