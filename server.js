@@ -128,7 +128,6 @@ async function lookupIP(ip) {
   const cacheKey = ip || 'auto';
   const cached = ipCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
-    console.log('Using cached location data for:', cacheKey);
     return cached.data;
   }
 
@@ -180,41 +179,23 @@ async function lookupIP(ip) {
   // Determine if we should use auto-detection
   const useAuto = !ip || ip === '::1' || ip === '127.0.0.1' || 
                   ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.');
-  
-  if (useAuto) {
-    console.log('Using auto IP detection for local/private IP:', ip);
-  } else {
-    console.log('Looking up specific IP:', ip);
-  }
 
   // Try each service
   for (const service of services) {
     try {
       const url = service.getUrl(useAuto ? null : ip);
-      console.log(`Trying ${service.name}:`, url);
-      
       const res = await fetch(url, { timeout: service.timeout });
       
       if (!res.ok) {
         if (res.status === 429) {
-          console.warn(`${service.name} rate limited (429), trying next service...`);
+          console.warn(`${service.name} rate limited, trying next service...`);
           continue;
         }
-        throw new Error(`${service.name} failed: ${res.status} ${res.statusText}`);
+        throw new Error(`${service.name} failed: ${res.status}`);
       }
       
       const json = await res.json();
-      
-      // Transform data if needed
       const locationData = service.transform ? service.transform(json) : json;
-      
-      console.log(`✅ ${service.name} success - Keys:`, Object.keys(locationData));
-      console.log('Location sample:', {
-        ip: locationData.ip,
-        city: locationData.city,
-        country: locationData.country_name || locationData.country,
-        org: locationData.org
-      });
       
       // Cache the result
       ipCache.set(cacheKey, {
@@ -238,9 +219,7 @@ function getClientIp(req) {
   // Prefer x-forwarded-for for deployments behind proxies/load balancers
   const forwarded = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
   if (forwarded) {
-    const ip = forwarded.split(',')[0].trim();
-    console.log('IP from forwarded header:', ip);
-    return ip;
+    return forwarded.split(',')[0].trim();
   }
   
   // Try various sources for the IP
@@ -255,13 +234,10 @@ function getClientIp(req) {
   
   for (const source of sources) {
     if (source) {
-      const ip = source.replace(/^::ffff:/, '').trim();
-      console.log('IP detected from source:', ip);
-      return ip;
+      return source.replace(/^::ffff:/, '').trim();
     }
   }
   
-  console.log('No IP detected, will use auto-detection');
   return '';
 }
 
@@ -271,24 +247,7 @@ app.post('/collect', async (req, res) => {
     const body = req.body || {};
     const detectedIp = getClientIp(req);
     
-    console.log('--- New device collection request ---');
-    console.log('Detected IP:', detectedIp);
-    console.log('Request headers:', {
-      'x-forwarded-for': req.headers['x-forwarded-for'],
-      'x-real-ip': req.headers['x-real-ip'],
-      'cf-connecting-ip': req.headers['cf-connecting-ip'],
-      'user-agent': req.headers['user-agent']?.substring(0, 100) + '...'
-    });
-
     const location = await lookupIP(detectedIp);
-    console.log('Location data received keys:', Object.keys(location));
-    console.log('Location data sample:', {
-      ip: location.ip,
-      city: location.city,
-      country: location.country_name,
-      latitude: location.latitude,
-      longitude: location.longitude
-    });
     
     // Use the IP from location data if available (more accurate for public IP)
     const finalIp = location.ip || detectedIp;
@@ -298,14 +257,11 @@ app.post('/collect', async (req, res) => {
       ip: finalIp,
       location: Object.keys(location).length > 0 ? location : null
     };
-
-    console.log('Saving device data with location keys:', Object.keys(deviceData.location || {}));
     
     const doc = new Device(deviceData);
     const saved = await doc.save();
     
-    console.log('Device data saved successfully with IP:', finalIp);
-    console.log('Saved location keys:', Object.keys(saved.location || {}));
+    console.log(`Device collected: ${finalIp} from ${location.city || 'Unknown'}, ${location.country_name || 'Unknown'}`);
 
     // Return the stored document to the frontend
     res.json({ success: true, data: saved });
@@ -341,8 +297,6 @@ app.get('/hello', (req, res) => {
 app.get('/test-location/:ip?', async (req, res) => {
   try {
     const testIp = req.params.ip || getClientIp(req);
-    console.log('Testing location lookup for IP:', testIp);
-    
     const location = await lookupIP(testIp);
     
     res.json({ 
@@ -523,12 +477,11 @@ function keepAlive() {
   
   setInterval(async () => {
     try {
-      console.log('🏓 Pinging server to keep alive...');
       const response = await fetch(`${url}/hello`);
       const data = await response.json();
-      console.log('✅ Keep-alive ping successful:', data.message);
+      console.log('✅ Keep-alive successful');
     } catch (error) {
-      console.warn('⚠️ Keep-alive ping failed:', error.message);
+      console.warn('⚠️ Keep-alive failed:', error.message);
     }
   }, 10 * 60 * 1000); // Ping every 10 minutes
 }
